@@ -7,11 +7,13 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 
 import javax.json.Json;
+import javax.json.JsonArray;
 import javax.json.JsonArrayBuilder;
 import javax.json.JsonObject;
 import javax.json.JsonObjectBuilder;
 import javax.json.JsonReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
@@ -19,6 +21,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Scanner;
 import java.util.Set;
 
@@ -29,8 +32,10 @@ public class Todo {
     public final static String TODO_FILL_DATA = "/fill";
     public final static String TODO_RESET = "/reset";
     public final static String TODO_ADD = "/todo/add";
+    public final static String TODO_BULK_ADD = "/todo/bulkAdd";
 
-    public final static String TODO_LIST_ALL = "/list";
+    public final static String TODO_LIST_ALL = "/todo/listAll";
+    public final static String TODO_LIST_ONE_CATEG = "/todo/listOneCateg";
 
     public final static String EXPECTED_TOKEN = "Bearer 1234567";
     public final static String Authorization_header = "Authorization";
@@ -54,6 +59,8 @@ public class Todo {
         reset(server);
         addEntry(server);
         list(server);
+        listOneCateg(server);
+        bulkAddEntry(server);
     }
 
     private static void listCategs(HttpServer server) {
@@ -87,23 +94,59 @@ public class Todo {
         });
     }
 
+    private static void listOneCateg(HttpServer server) {
+        server.createContext(TODO_LIST_ONE_CATEG, new HttpHandler() {
+
+            public void handle(HttpExchange exchange) throws IOException {
+                String categ = null;
+                List<String> categs = exchange.getRequestHeaders().get("Categ");
+                if (categs != null) {
+                    categ = categs.get(0);
+                }
+                JsonObject all = _listAll(categ);
+
+                int status = HttpURLConnection.HTTP_OK;
+                byte[] payload = all.toString().getBytes();
+                sendJson(status, payload, exchange);
+            }
+        });
+    }
+
 
     private static void addEntry(HttpServer server) {
         server.createContext(TODO_ADD, new HttpHandler() {
 
             public void handle(HttpExchange exchange) throws IOException {
-                if(!_checkAuth(exchange)){
+                if (!_checkAuth(exchange)) {
                     return;
                 }
 
-                JsonReader reader = Json.createReader(exchange.getRequestBody());
-                JsonObject jsonObject = reader.read().asJsonObject();
-                Entry todo = new Entry(false, jsonObject.getString("todo"));
-                String categ = jsonObject.getString("categ").toLowerCase();
-                if(!data.containsKey(categ)){
-                    data.put(categ, new ArrayList<>());
+                _insertOne(exchange.getRequestBody());
+
+                JsonObject all = _listAll();
+
+                int status = HttpURLConnection.HTTP_OK;
+                byte[] payload = all.toString().getBytes();
+                sendJson(status, payload, exchange);
+            }
+        });
+    }
+
+    private static void bulkAddEntry(HttpServer server) {
+        server.createContext(TODO_BULK_ADD, new HttpHandler() {
+            public void handle(HttpExchange exchange) throws IOException {
+                if (!_checkAuth(exchange)) {
+                    return;
                 }
-                data.get(categ).add(todo);
+                JsonReader reader = Json.createReader(exchange.getRequestBody());
+                JsonArray array = reader.readArray();
+
+                for(int i=0; i<array.size(); i++){
+                    JsonObject jsonObject = array.getJsonObject(i);
+                    _insertOne(jsonObject);
+                }
+
+
 
                 JsonObject all = _listAll();
 
@@ -144,7 +187,7 @@ public class Todo {
 
     private static boolean _checkAuth(HttpExchange exchange) throws IOException {
         List<String> authorization = exchange.getRequestHeaders().get(Authorization_header);
-        if(authorization == null || authorization.size() <= 0 || !EXPECTED_TOKEN.equals(authorization.get(0))){
+        if (authorization == null || authorization.size() <= 0 || !EXPECTED_TOKEN.equals(authorization.get(0))) {
             JsonObject response = Json.createObjectBuilder().add("response", "Bad authentication").build();
             int status = HttpURLConnection.HTTP_UNAUTHORIZED;
             byte[] payload = response.toString().getBytes();
@@ -154,15 +197,39 @@ public class Todo {
         return true;
     }
 
-    private static void _reset(){
+    private static void _reset() {
         data.clear();
     }
 
-    private static JsonObject _listAll(){
+    private static void _insertOne(InputStream jsonStream) {
+        JsonReader reader = Json.createReader(jsonStream);
+        JsonObject jsonObject = reader.read().asJsonObject();
+        _insertOne(jsonObject);
+    }
+
+    private static void _insertOne(JsonObject jsonObject){
+        Entry todo = new Entry(false, jsonObject.getString("todo"));
+        String categ = jsonObject.getString("categ").toLowerCase();
+        if (!data.containsKey(categ)) {
+            data.put(categ, new ArrayList<>());
+        }
+        data.get(categ).add(todo);
+
+    }
+
+    private static JsonObject _listAll() {
+        return _listAll(null);
+    }
+
+    private static JsonObject _listAll(String categFilter) {
+        categFilter = categFilter == null ? null : categFilter.trim();
         JsonObjectBuilder categs = Json.createObjectBuilder();
-        for(String c : data.keySet()){
+        for (String c : data.keySet()) {
+            if (categFilter != null && !categFilter.equals(c.trim())) {
+                continue;
+            }
             JsonArrayBuilder content = Json.createArrayBuilder();
-            for(Entry t : data.get(c)){
+            for (Entry t : data.get(c)) {
                 JsonObjectBuilder entry = Json.createObjectBuilder();
                 entry.add("done", t.isDone());
                 entry.add("todo", t.getTodo());
@@ -174,7 +241,7 @@ public class Todo {
         return categs.build();
     }
 
-    private static void _fillData(){
+    private static void _fillData() {
         List<Entry> prez = new ArrayList<>();
         prez.add(new Entry(false, "Create TODO project"));
         prez.add(new Entry(false, "Create PPT"));
@@ -194,8 +261,8 @@ public class Todo {
         data.put("training", training);
     }
 
-    private static String getRequestBodyAsString(HttpExchange exchange){
-            return new Scanner(exchange.getRequestBody(), "UTF-8").useDelimiter("\\A").next();
+    private static String getRequestBodyAsString(HttpExchange exchange) {
+        return new Scanner(exchange.getRequestBody(), "UTF-8").useDelimiter("\\A").next();
     }
 
     private static void sendJson(int status, byte[] json, HttpExchange exchange) throws IOException {
@@ -208,7 +275,7 @@ public class Todo {
 
     @Data
     @AllArgsConstructor
-    public static class Entry{
+    public static class Entry {
         private boolean done;
         private String todo;
     }

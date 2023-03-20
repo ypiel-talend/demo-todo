@@ -28,6 +28,7 @@ import java.util.Set;
 
 public class Todo {
 
+    public final static String TODO_CHECK = "/check";
     public final static String TODO_LIST_CATEG = "/categ/list";
     public final static String TODO_FILL_DATA = "/fill";
     public final static String TODO_RESET = "/reset";
@@ -43,10 +44,19 @@ public class Todo {
     private static Map<String, List<Entry>> data = new HashMap<>();
 
     public static void main(String[] args) throws IOException {
-        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
-        int port = server.getAddress().getPort();
+        if(args.length < 1){
+            System.err.println("<port> is a mandatory parameter.");
+            System.exit(1);
+        }
+        int port = Integer.parseInt(args[0]);
 
+        HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
         System.out.println("********************* START SERVER on port " + port);
+
+        InetSocketAddress bindAddress = server.getAddress();
+        System.out.println("********************* Bind address: " + bindAddress.getHostString());
+
+        _fillData();
 
         configureServer(server);
 
@@ -61,6 +71,23 @@ public class Todo {
         list(server);
         listOneCateg(server);
         bulkAddEntry(server);
+        check(server);
+    }
+
+    private static void check(HttpServer server) {
+        server.createContext(TODO_CHECK, new HttpHandler() {
+
+            public void handle(HttpExchange exchange) throws IOException {
+                int status = HttpURLConnection.HTTP_OK;
+                if (!_checkAuth(exchange)) {
+                    status = HttpURLConnection.HTTP_UNAUTHORIZED;
+                }
+
+                exchange.sendResponseHeaders(status, 0);
+                OutputStream os = exchange.getResponseBody();
+                os.close();
+            }
+        });
     }
 
     private static void listCategs(HttpServer server) {

@@ -3,8 +3,6 @@ package org.talend.demo.todo;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
-import lombok.AllArgsConstructor;
-import lombok.Data;
 
 import javax.json.Json;
 import javax.json.JsonArray;
@@ -21,9 +19,11 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Scanner;
 import java.util.Set;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
 
 
 public class Todo {
@@ -44,7 +44,7 @@ public class Todo {
     private static Map<String, List<Entry>> data = new HashMap<>();
 
     public static void main(String[] args) throws IOException {
-        if(args.length < 1){
+        if (args.length < 1) {
             System.err.println("<port> is a mandatory parameter.");
             System.exit(1);
         }
@@ -166,20 +166,28 @@ public class Todo {
                     return;
                 }
                 JsonReader reader = Json.createReader(exchange.getRequestBody());
-                JsonArray array = reader.readArray();
+                JsonObject payload = reader.readObject();
+                JsonArray array = payload.getJsonArray("todos");
+                boolean createCategory = payload.getBoolean("createCategory");
 
-                for(int i=0; i<array.size(); i++){
+                Map<String, List<String>> result = new HashMap<>();
+                result.put("added", new ArrayList<String>());
+                result.put("rejected", new ArrayList<String>());
+
+                for (int i = 0; i < array.size(); i++) {
                     JsonObject jsonObject = array.getJsonObject(i);
-                    _insertOne(jsonObject);
+                    if (_insertOne(jsonObject, createCategory)) {
+                        result.get("added").add(jsonObject.getString("todo"));
+                    } else {
+                        result.get("rejected").add(jsonObject.getString("todo"));
+                    }
                 }
 
-
-
-                JsonObject all = _listAll();
+                JsonObject resultPayload = _toBulkInsertResponse(result);
 
                 int status = HttpURLConnection.HTTP_OK;
-                byte[] payload = all.toString().getBytes();
-                sendJson(status, payload, exchange);
+                byte[] resultPayloadBytes = resultPayload.toString().getBytes();
+                sendJson(status, resultPayloadBytes, exchange);
             }
         });
     }
@@ -228,20 +236,27 @@ public class Todo {
         data.clear();
     }
 
-    private static void _insertOne(InputStream jsonStream) {
-        JsonReader reader = Json.createReader(jsonStream);
-        JsonObject jsonObject = reader.read().asJsonObject();
-        _insertOne(jsonObject);
+    private static boolean _insertOne(InputStream jsonStream) {
+        return _insertOne(jsonStream, true);
     }
 
-    private static void _insertOne(JsonObject jsonObject){
+    private static boolean _insertOne(InputStream jsonStream, boolean createCategory) {
+        JsonReader reader = Json.createReader(jsonStream);
+        JsonObject jsonObject = reader.read().asJsonObject();
+        return _insertOne(jsonObject, createCategory);
+    }
+
+    private static boolean _insertOne(JsonObject jsonObject, boolean createCategory) {
         Entry todo = new Entry(false, jsonObject.getString("todo"));
         String categ = jsonObject.getString("categ").toLowerCase();
-        if (!data.containsKey(categ)) {
+        if (!data.containsKey(categ) && createCategory) {
             data.put(categ, new ArrayList<>());
         }
+        if (!data.containsKey(categ)) {
+            return false;
+        }
         data.get(categ).add(todo);
-
+        return true;
     }
 
     private static JsonObject _listAll() {
@@ -288,6 +303,21 @@ public class Todo {
         data.put("training", training);
     }
 
+    private static JsonObject _toBulkInsertResponse(Map<String, List<String>> result) {
+        JsonObjectBuilder resultObject = Json.createObjectBuilder();
+
+        JsonArrayBuilder added = Json.createArrayBuilder();
+        result.get("added").forEach(added::add);
+
+        JsonArrayBuilder rejected = Json.createArrayBuilder();
+        result.get("rejected").forEach(rejected::add);
+
+        resultObject.add("added", added.build());
+        resultObject.add("rejected", rejected.build());
+
+        return resultObject.build();
+    }
+
     private static String getRequestBodyAsString(HttpExchange exchange) {
         return new Scanner(exchange.getRequestBody(), "UTF-8").useDelimiter("\\A").next();
     }
@@ -297,6 +327,7 @@ public class Todo {
         exchange.sendResponseHeaders(status, json.length);
         OutputStream os = exchange.getResponseBody();
         os.write(json);
+        os.flush();
         os.close();
     }
 
